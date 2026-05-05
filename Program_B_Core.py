@@ -122,12 +122,17 @@ class CoreSystem:
 
     def main(self):
         t_int = int(datetime.now().strftime("%H%M"))
-        if 900 <= t_int <= 1400:
-            for i in range(2):
-                self.run_trading_mode()
-                if i == 0: time.sleep(60)
-        else:
-            self.send_to_discord(f"🌙 系統待命 (時間: {t_int})")
+        if 900 <= t_int <= 1330:
+            # 盤中監控邏輯...
+            self.run_trading_mode()
+        elif 1331 <= t_int <= 1400:
+            print("💾 執行盤後總結與進化分析...")
+            try:
+                import Program_E_Evolution as E
+                E.run_evolution()
+            except Exception as e:
+                print(f"結算報錯: {e}")
+
 
 if __name__ == "__main__":
     os.environ['TZ'] = 'Asia/Taipei'

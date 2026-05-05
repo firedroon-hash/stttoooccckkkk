@@ -1,103 +1,84 @@
-import os, json, time, importlib.util, gc
+import os, time, importlib.util, gc, requests
 from datetime import datetime
 import pandas as pd
-import requests
+import Program_A_Fetcher as A
 
-# 嘗試導入數據引擎
-try:
-    import Program_A_Fetcher as A
-except ImportError:
-    print("❌ [錯誤] 找不到 Program_A_Fetcher.py")
-
-# 讀取 Secret 環境變數
+# 環境變數設定
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 class CoreSystem:
     def __init__(self):
-        print(f"--- [系統初始化] ---")
-        print(f"Webhook URL 檢查: {'✅ 已讀取' if WEBHOOK_URL else '❌ 未讀取 (請檢查 GitHub Secrets)'}")
+        print(f"--- [系統啟動中] ---")
+        print(f"Webhook 狀態: {'✅ OK' if WEBHOOK_URL else '❌ 缺失'}")
         self.data_service = A.get_data_service()
+        
+        # 預加載 C 與 D 程序，加速迴圈執行
+        self.mod_c = self.load_module("Program_C_Enhanced.py")
+        self.mod_d = self.load_module("Program_D_Manual.py")
 
-    def send_to_discord(self, content, file_path=None):
-        """【傳訊區段】專責訊息發送與診斷"""
-        print(f"📡 [傳訊中] 內容預覽: {content[:30]}...")
-        if not WEBHOOK_URL:
-            print("⚠️ [傳訊中斷] 原因：WEBHOOK_URL 為空值")
-            return
+    def load_module(self, filename):
+        if not os.path.exists(filename): return None
+        spec = importlib.util.spec_from_file_location("module", filename)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
+    def send_to_discord(self, content):
+        if not WEBHOOK_URL: return
         try:
-            if file_path and os.path.exists(file_path):
-                with open(file_path, 'rb') as f:
-                    r = requests.post(WEBHOOK_URL, data={'content': content}, files={'file': f}, timeout=10)
-            else:
-                r = requests.post(WEBHOOK_URL, json={"content": content}, timeout=10)
-            
-            if r.status_code == 204 or r.status_code == 200:
-                print(f"✅ [傳訊成功] Discord 回傳狀態碼: {r.status_code}")
-            else:
-                print(f"❌ [傳訊失敗] Discord 回傳錯誤: {r.status_code}, 內容: {r.text}")
+            requests.post(WEBHOOK_URL, json={"content": content}, timeout=5)
         except Exception as e:
-            print(f"❌ [傳訊異常] 發生錯誤: {e}")
+            print(f"傳訊失敗: {e}")
 
     def run_trading_mode(self):
-        """【分析區段】專責數據抓取與 AI 決策"""
-        print(f"\n🔍 [分析啟動] {datetime.now().strftime('%H:%M:%S')}")
-        
+        print(f"\n⚡ [極速掃描] {datetime.now().strftime('%H:%M:%S')}")
         df_all = self.data_service.fetch_market_snapshot()
         market_index = self.data_service.fetch_index_status()
         
         if df_all.empty:
-            print("⚠️ [分析中止] 無法從 API 獲取任何市場數據")
+            print("⚠️ 無法獲取數據")
             return
 
         up_ratio = len(df_all[df_all['change_rate'] > 0]) / len(df_all)
-        print(f"📈 [數據] 市場上漲比: {up_ratio:.1%}, 掃描股票數: {len(df_all)}")
+        print(f"📊 市場上漲比: {up_ratio:.1%}")
 
-        # 排序前 50 名
-        df_all['amount_rank'] = df_all['amount'].rank(ascending=False)
-        targets = df_all.nlargest(50, 'amount')
+        # 排序主流標的
+        targets = df_all.sort_values(by='amount', ascending=False)
         
         match_count = 0
         for _, row in targets.iterrows():
-            tick = self.data_service.fetch_tick_details(row['stock_id'])
-            context = {"up_ratio": up_ratio, "change_rate": row['change_rate'], "market_index": market_index, "tick_details": tick}
+            context = {
+                "up_ratio": up_ratio, 
+                "change_rate": row['change_rate'], 
+                "market_index": market_index, 
+                "tick_details": pd.DataFrame() # 預設空，觸發 C 程式 0.5 判定
+            }
             
-            # 調用 C 程式 (AI 大腦)
-            try:
-                spec = importlib.util.spec_from_file_location("C", "Program_C_Enhanced.py")
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                decision = mod.enhanced_process([row['last_price']]*10, context)
-            except Exception as e:
-                print(f"❌ [分析異常] 執行 Program_C 失敗: {e}")
-                continue
-            
-            if decision and decision.get("action") == "BUY":
-                match_count += 1
-                msg = f"🎯 [訊號發現] {row['stock_id']} | 建議價: {decision['entry']}"
-                print(msg)
-                self.send_to_discord(msg)
-                
-                # 調用 D 程式產出報告
-                try:
-                    spec_d = importlib.util.spec_from_file_location("D", "Program_D_Manual.py")
-                    mod_d = importlib.util.module_from_spec(spec_d)
-                    spec_d.loader.exec_module(mod_d)
-                    mod_d.enhanced_process([row['last_price']]*10)
-                except: pass
+            if self.mod_c:
+                decision = self.mod_c.enhanced_process([row['last_price']]*10, context)
+                if decision and decision.get("action") == "BUY":
+                    match_count += 1
+                    msg = f"🎯 **訊號**: {row['stock_id']} | 建議:{decision['entry']} | {decision['info']}"
+                    print(f"✅ {msg}")
+                    self.send_to_discord(msg)
+                    # 產出報表
+                    if self.mod_d: self.mod_d.enhanced_process([row['last_price']]*10)
 
-        if match_count == 0:
-            print("ℹ️ [分析結果] 掃描完畢，目前無符合 AI 買入標準的標的")
+        if match_count == 0: print("ℹ️ 掃描完成，未達進場門檻。")
 
     def main(self):
         t_int = int(datetime.now().strftime("%H%M"))
-        # 1021 這種格式判斷
-        if 905 <= t_int <= 1330:
-            print(f"⏰ [時段確認] 目前為盤中監控時段 ({t_int})")
-            self.run_trading_mode()
+        # 判斷盤中時段
+        if 900 <= t_int <= 1335:
+            print(f"⏰ 進入監控時段 ({t_int})")
+            # 每次 Action 跑 2 次掃描，間隔 30 秒，減少 GitHub 負擔
+            for i in range(2):
+                self.run_trading_mode()
+                if i == 0: time.sleep(30)
         else:
-            print(f"💤 [時段確認] 目前非交易時段 ({t_int})")
-            self.send_to_discord(f"🌙 AI 系統待命回報 (目前時間: {t_int})")
+            msg = f"🌙 系統待命回報 (時間: {t_int})"
+            print(msg)
+            self.send_to_discord(msg)
 
 if __name__ == "__main__":
     CoreSystem().main()

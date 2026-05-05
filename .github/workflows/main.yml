@@ -11,7 +11,8 @@ jobs:
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       MY_STRATEGY_KEY: ${{ secrets.MY_STRATEGY_KEY }}
-      TZ: Asia/Taipei 
+      FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }} # ✅ 加上這行
+      TZ: Asia/Taipei
 
     steps:
       - uses: actions/checkout@v3

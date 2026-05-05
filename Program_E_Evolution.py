@@ -1,7 +1,5 @@
-# ==============================================================================
-# 程式名稱：Program_E_Evolution.py (當日結算與總結報告版)
-# ==============================================================================
-import os, pandas as pd, requests
+import os, pandas as pd, requests, time
+import yfinance as yf
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -9,88 +7,133 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# 讀取 Secrets
+# --- 基礎設定 ---
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+STOCK_NAMES = {'2330':'台積電', '2317':'鴻海', '2454':'聯發科', '2303':'聯電', '2603':'長榮', '2609':'陽明', '2382':'廣達', '3231':'緯創'}
 
 def setup_font():
     font_path = "NotoSansTC-Regular.ttf"
     if not os.path.exists(font_path):
         url = "https://github.com"
-        r = requests.get(url)
-        with open(font_path, "wb") as f: f.write(r.content)
+        try:
+            r = requests.get(url, timeout=30)
+            with open(font_path, "wb") as f: f.write(r.content)
+        except: return "Helvetica"
     pdfmetrics.registerFont(TTFont('SourceHan', font_path))
     return 'SourceHan'
 
-def generate_daily_summary(df):
-    """產出當日總結 PDF"""
+def generate_summary_pdf(results, total_pl, today_str):
+    """[功能補回] 產出當日結算總結 PDF"""
     font_name = setup_font()
-    filename = f"Daily_Summary_{datetime.now().strftime('%Y%m%d')}.pdf"
+    filename = f"Daily_Final_Report_{today_str}.pdf"
     c = canvas.Canvas(filename, pagesize=A4)
     width, height = A4
 
-    # 標題設計 (深金/橘色區分盤中報告)
-    c.setFillColor(colors.HexColor("#D35400"))
+    # 標題區 (橘色代表結算)
+    c.setFillColor(colors.HexColor("#E67E22"))
     c.rect(0, height-100, width, 100, fill=1)
     c.setFillColor(colors.white)
     c.setFont(font_name, 26)
-    c.drawString(40, height-55, "當日交易戰果結算報告")
+    c.drawString(40, height-55, "當日實戰模擬結算報告")
     c.setFont(font_name, 12)
-    c.drawString(40, height-80, f"Trading Day: {datetime.now().strftime('%Y-%m-%d')} | 系統自動結算")
+    c.drawString(40, height-80, f"Trading Date: {today_str} | 100萬本金驗證模組")
 
-    # 數據總覽區
+    # 損益總覽
     y = height - 150
     c.setFillColor(colors.black)
-    total_trades = len(df)
-    # 簡單模擬損益 (實際環境會抓取 Program_A 最終收盤價)
-    c.setFont(font_name, 14)
-    c.drawString(40, y, f"今日發送訊號總數: {total_trades} 筆")
-    
+    c.setFont(font_name, 16)
+    status_text = "獲利" if total_pl >= 0 else "虧損"
+    c.drawString(40, y, f"本日總損益: {total_pl:,.0f} 元 ({status_text})")
+
     # 表格 Header
     y -= 40
-    c.setFillColor(colors.lightgrey)
+    c.setFillColor(colors.whitesmoke)
     c.rect(35, y-5, 525, 25, fill=1, stroke=0)
     c.setFillColor(colors.black)
     c.setFont(font_name, 10)
-    headers = ["標的代碼", "建議進場價", "預判高點", "最高落差", "狀態"]
-    cols = [45, 150, 260, 370, 480]
-    for i, h in enumerate(headers):
-        c.drawString(cols[i], y+2, h)
+    headers = ["股票", "成交價", "平倉價(Bid)", "股數", "盈虧", "預判落差%"]
+    cols = 
+    for i, h in enumerate(headers): c.drawString(cols[i], y+2, h)
 
     # 數據列
     y -= 25
-    for _, row in df.iterrows():
+    for r in results:
         c.setFont(font_name, 10)
-        c.drawString(cols[0], y, str(row['stock_id']))
-        c.drawString(cols[1], y, f"{row['entry_price']:.2f}")
-        c.drawString(cols[2], y, f"{row['pred_high']:.2f}")
+        c.drawString(cols, y, f"{r['sid']} {STOCK_NAMES.get(r['sid'],'')}")
+        c.drawString(cols, y, f"{r['entry']:.2f}")
+        c.drawString(cols, y, f"{r['exit']:.2f}")
+        c.drawString(cols, y, f"{r['shares']}")
         
-        # 這裡會從 history_log 分析數據
-        diff = ((row['pred_high'] - row['entry_price']) / row['entry_price']) * 100
-        c.drawString(cols[3], y, f"{diff:.1f}%")
+        # 盈虧顏色判定
+        if r['pl'] >= 0: c.setFillColor(colors.red)
+        else: c.setFillColor(colors.green)
+        c.drawString(cols, y, f"{r['pl']:,.0f}")
         
-        status = "達標" if diff > 3 else "觀察"
-        c.drawString(cols[4], y, status)
+        c.setFillColor(colors.black)
+        c.drawString(cols, y, f"{r['error']:.1%}")
         
+        c.setStrokeColor(colors.lightgrey)
         c.line(35, y-5, 560, y-5)
         y -= 25
+        if y < 50: c.showPage(); y = height - 50
 
     c.save()
     return filename
 
 def run_evolution():
-    # 這裡會讀取 Program_B 寫入的 history_log.csv
-    log_file = "history_log.csv"
-    if os.path.exists(log_file):
-        df = pd.read_csv(log_file)
-        pdf = generate_daily_summary(df)
-        
-        # 發送至 Discord
-        if WEBHOOK_URL:
-            with open(pdf, 'rb') as f:
-                requests.post(WEBHOOK_URL, data={'content': "📊 **收盤戰報**：今日 AI 交易執行總結已產出。"}, files={'file': f})
-        print("✅ 當日結算報告已發送")
-    else:
-        print("ℹ️ 今日無成交紀錄，跳過結算報告。")
+    """核心結算與進化邏輯"""
+    if not os.path.exists("history_log.csv"):
+        print("ℹ️ 今日無成交紀錄")
+        return
+
+    df = pd.read_csv("history_log.csv")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    df_today = df[(df['date'] == today_str) & (df['status'] == 'OPEN')]
+    
+    if df_today.empty:
+        print("ℹ️ 今日無待結算部位")
+        return
+
+    results = []
+    total_pl = 0
+
+    print(f"📊 開始結算 {len(df_today)} 筆交易...")
+    for _, trade in df_today.iterrows():
+        try:
+            # 抓取最終收盤資料 (Bid 價模擬真實賣出)
+            ticker = yf.Ticker(f"{trade['stock_id']}.TW")
+            final_p = ticker.fast_info['last_price']
+            final_bid = final_p * 0.9995 # 考慮買賣點差
+            
+            # 成本計算 (手續費 + 稅)
+            cost = trade['entry_p'] * trade['shares'] * 1000 * 1.001425
+            revenue = final_bid * trade['shares'] * 1000 * 0.997075
+            pl = revenue - cost
+            total_pl += pl
+
+            # [功能補回] 進化分析：預判價與實際最高價的誤差
+            day_high = ticker.fast_info.get('day_high', final_p)
+            error_pct = (day_high - trade['pred_high']) / trade['pred_high']
+
+            results.append({
+                'sid': str(trade['stock_id']), 'entry': trade['entry_p'],
+                'exit': final_bid, 'shares': trade['shares'], 'pl': pl, 'error': error_pct
+            })
+        except: continue
+
+    # 產出報告
+    pdf_path = generate_summary_pdf(results, total_pl, today_str)
+    
+    # [功能補回] 更新歷史紀錄狀態為 CLOSED
+    df.loc[(df['date'] == today_str) & (df['status'] == 'OPEN'), 'status'] = 'CLOSED'
+    df.to_csv("history_log.csv", index=False)
+
+    # 發送至 Discord
+    if WEBHOOK_URL:
+        msg = f"🏁 **今日交易最終結算**\n💰 總損益：**{total_pl:,.0f}** 元\n分析建議：{'今日策略表現優異' if total_pl > 0 else '今日市場波動劇烈，建議優化門檻'}"
+        with open(pdf_path, 'rb') as f:
+            requests.post(WEBHOOK_URL, data={'content': msg}, files={'file': f})
+        os.remove(pdf_path)
 
 if __name__ == "__main__":
     run_evolution()

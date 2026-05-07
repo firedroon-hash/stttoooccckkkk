@@ -1,8 +1,21 @@
 import pandas as pd
 import yfinance as yf
+import shutil
+import os
 from datetime import datetime
 import time
 
+# 1. 強制停用時區快取
+yf.set_tz_cache_location(None)
+
+# 2. 強制刪除可能殘留的鎖定資料庫 (針對 GitHub Actions 環境)
+cache_path = os.path.expanduser('~/.cache/py-yfinance')
+if os.path.exists(cache_path):
+    try:
+        shutil.rmtree(cache_path)
+        print("🧹 已清除 yfinance 殘留快取")
+    except:
+        pass
 class DataFetcher:
     def __init__(self, token=None):
         self.hot_list = ['2330.TW','2317.TW','2454.TW','2303.TW','2603.TW','2609.TW','2382.TW','3231.TW','1513.TW','1504.TW','3481.TW','2409.TW','2308.TW','2357.TW','2618.TW','2610.TW']

@@ -1,8 +1,9 @@
 # ==============================================================================
-# 程式名稱：Program_B_Core.py (AI 實戰中控核心 - v46.1 終極版修復日誌)
+# 程式名稱：Program_B_Core.py (AI 實戰中控核心 - v46.2 穩定修復版)
 # ==============================================================================
 
 import os, json, time, importlib.util, gc, requests, pandas as pd
+import tempfile, shutil  # [新增] 用於處理快取鎖定問題
 from datetime import datetime
 import Program_A_Fetcher as A
 from Crypto.Cipher import AES
@@ -13,22 +14,30 @@ WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 MY_STRATEGY_KEY = os.environ.get("MY_STRATEGY_KEY", "").strip()
 FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN", "").strip()
 
+# --- [核心修正] 強制解決 yfinance 資料庫鎖定與路徑錯誤 ---
+try:
+    import yfinance as yf
+    # 建立一個實體的暫存路徑，避免使用 None 導致 TypeError
+    tmp_dir = os.path.join(tempfile.gettempdir(), "yf_cache_service")
+    if not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir)
+    yf.set_tz_cache_location(tmp_dir)
+    print(f"📁 已重新導向數據快取至: {tmp_dir}")
+except Exception as e:
+    print(f"⚠️ 快取初始化警告 (可忽略): {e}")
+
 class CoreSystem:
     def __init__(self):
         print(f"[{datetime.now()}] 🚀 系統初始化 (v46.1)")
         self.data_service = A.get_data_service(FINMIND_TOKEN)
         self.sent_stocks = {} 
-        self.capital = 1000000.0 # 100 萬總本金
-        self.per_trade = 200000.0 # 每檔限制 20 萬
+        self.capital = 1000000.0 
+        self.per_trade = 200000.0 
         
-        # 1. 加載核心策略 (優先解密)
         self.mod_f = self.load_encrypted_f() 
-        # 2. 加載 PDF 報告官
         self.mod_d = self.load_module("Program_D_Manual.py")
-        # 3. 加載結算進化官
         self.mod_e = self.load_module("Program_E_Evolution.py")
         
-        # [修復] 初始化後立即發送一則通知，確認 Webhook 通暢
         self.send_to_discord(f"✅ 系統初始化成功 (時間: {datetime.now().strftime('%H:%M:%S')})，目前正在嘗試監控盤中數據...")
 
     def load_encrypted_f(self):
@@ -63,7 +72,6 @@ class CoreSystem:
             print("❌ 錯誤: 找不到 DISCORD_WEBHOOK_URL 環境變數")
             return
         
-        # [修復] 補全原本缺失的 Discord 發送實作代碼
         payload = {"content": message}
         try:
             if file_path and os.path.exists(file_path):
@@ -83,28 +91,36 @@ class CoreSystem:
         """盤中監控與真實成交模擬"""
         now_time = datetime.now().strftime('%H:%M:%S')
         print(f"⚡ [監控中] {now_time}")
-        df_all = self.data_service.fetch_market_snapshot()
-        market_index = self.data_service.fetch_index_status()
-        if df_all.empty: 
+        
+        try:
+            df_all = self.data_service.fetch_market_snapshot()
+            market_index = self.data_service.fetch_index_status()
+        except Exception as e:
+            print(f"❌ 抓取 Snapshot 失敗: {e}")
+            return
+
+        if df_all is None or df_all.empty: 
             print("⚠️ 警告: 抓取不到市場數據")
             return
 
         matched_list = []
         history_file = "history_log.csv"
 
-        # 監控前 50 檔成交量大的
         for _, row in df_all.sort_values(by='amount', ascending=False).head(50).iterrows():
             sid = row['stock_id']
-            
-            # 冷卻時間檢查
             if sid in self.sent_stocks and (time.time() - self.sent_stocks[sid]) < 3600: continue
             
-            # [診斷] 流動性檢查
             is_liquid = row.get('is_liquid', True)
             if not is_liquid: continue
 
-            # 模擬掛單數據餵入
-            tick_details = self.data_service.fetch_tick_details(sid)
+            # [優化] 針對個別標的抓取加入 Exception 處理，避免單一失敗中斷全部
+            try:
+                tick_details = self.data_service.fetch_tick_details(sid)
+                if tick_details is None: continue
+            except Exception as e:
+                print(f"⚠️ 跳過 {sid}: 數據詳細資料抓取失敗 ({e})")
+                continue
+
             prices = [row['last_price']] * 10
             context = {
                 "up_ratio": len(df_all[df_all['change_rate'] > 0]) / len(df_all),
@@ -115,7 +131,6 @@ class CoreSystem:
             if self.mod_f:
                 try:
                     decision = self.mod_f.enhanced_process(prices, context)
-                    # [診斷日誌]
                     if decision and decision.get("action") == "BUY":
                         print(f"🎯 [訊號觸發] {sid} 策略判斷買入!")
                         self.sent_stocks[sid] = time.time()
@@ -150,10 +165,8 @@ class CoreSystem:
 
     def main(self):
         t_int = int(datetime.now().strftime("%H%M"))
-        
         if 900 <= t_int <= 1330:
             print(f"⏰ 盤中監控時段 ({t_int})")
-            # [調整] 增加測試頻率或循環，確保 Action 不會太快結束
             for i in range(2):
                 self.run_trading_mode()
                 if i < 1: 

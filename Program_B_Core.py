@@ -82,6 +82,7 @@ class CoreSystem:
         except: pass
 
     def run_trading_mode(self):
+        """盤中監控：整合一秒選股、一鍵試算、一眼監控功能"""
         now_time = datetime.now().strftime('%H:%M:%S')
         print(f"⚡ [監控中] 當前時間: {now_time}")
         try:
@@ -97,7 +98,6 @@ class CoreSystem:
             sid = row['stock_id']
             if sid in self.sent_stocks and (time.time() - self.sent_stocks[sid]) < 3600: continue
             
-            # --- [新增中文診斷訊息] ---
             print(f"🔍 檢查標的: {sid}", end=" | ")
 
             try:
@@ -113,12 +113,16 @@ class CoreSystem:
                     decision = self.mod_f.enhanced_process(prices, context)
                     action = decision.get("action", "HOLD")
                     
-                    # 顯示策略判斷結果
                     if action == "BUY":
                         print(f"✅ 買入訊號觸發！")
                         self.sent_stocks[sid] = time.time()
+                        
+                        # 功能 2：自動帶入條件並試算損益
                         real_entry = max(decision['entry'], row.get('ask_p', row['last_price']))
                         shares = int(self.per_trade / (real_entry * 1000))
+                        # 試算預期損益金額 (1000股=1張)
+                        est_profit = (decision['pred_high'] - real_entry) * shares * 1000
+                        
                         if shares > 0:
                             trade_record = {
                                 'date': datetime.now().strftime("%Y-%m-%d"), 'time': now_time,
@@ -126,7 +130,8 @@ class CoreSystem:
                                 'high_p': row['high_price'], 'low_p': row['low_price'],
                                 'entry_p': real_entry, 'exit_p': decision['stop_loss'],
                                 'pred_high': decision['pred_high'], 'shares': shares, 'status': 'OPEN',
-                                'info': decision.get('info', '')
+                                'est_profit': est_profit, # [新增] 試算損益
+                                'info': decision.get('info', '🚀 策略當沖訊號觸發') # 功能 3：狀態追蹤
                             }
                             matched_list.append(trade_record)
                             pd.DataFrame([trade_record]).to_csv("history_log.csv", mode='a', header=not os.path.exists("history_log.csv"), index=False)
@@ -135,12 +140,25 @@ class CoreSystem:
             except Exception as e:
                 print(f"❌ 診斷失敗: {e}")
 
+        # 功能 1 & 3：一秒選股與一眼監控傳訊
         if matched_list and self.mod_d:
             try:
+                # 取得選股代號列表
+                stock_ids = [d['stock_id'] for d in matched_list]
+                stock_str = ", ".join(stock_ids)
+                
+                # 組裝 Discord 訊息：達成「一秒選股」與「快速追蹤即時交易」
+                summary_msg = (
+                    f"🎯 **【策略當沖股一秒快選】**: `{stock_str}`\n"
+                    f"📝 **交易狀態**: `自動追蹤中` | **當前標的數**: `{len(matched_list)}`\n"
+                    f"💡 *提示：進出場條件與損益試算請見下方 PDF 報告*"
+                )
+                
                 pdf_path = self.mod_d.enhanced_process(matched_list)
-                self.send_to_discord(f"🎯 AI 發現買入訊號: {', '.join([d['stock_id'] for d in matched_list])}", pdf_path)
+                self.send_to_discord(summary_msg, pdf_path)
                 if pdf_path and os.path.exists(pdf_path): os.remove(pdf_path)
             except: pass
+
 
     def main_logic(self):
         t_int = int(datetime.now().strftime("%H%M"))

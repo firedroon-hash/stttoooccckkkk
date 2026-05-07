@@ -1,8 +1,5 @@
 # ==============================================================================
-# 程式名稱：Program_B_Core.py (AI 實戰中控核心 - v46.1 終極版)
-# ------------------------------------------------------------------------------
-# 實戰功能：
-# 1. 100萬本金分配 2. AES-256 解密 3. 盤中 PDF 彙整 4. 盤後 E 程式自動結算
+# 程式名稱：Program_B_Core.py (AI 實戰中控核心 - v46.1 終極版修復日誌)
 # ==============================================================================
 
 import os, json, time, importlib.util, gc, requests, pandas as pd
@@ -30,6 +27,9 @@ class CoreSystem:
         self.mod_d = self.load_module("Program_D_Manual.py")
         # 3. 加載結算進化官
         self.mod_e = self.load_module("Program_E_Evolution.py")
+        
+        # [修復] 初始化後立即發送一則通知，確認 Webhook 通暢
+        self.send_to_discord(f"✅ 系統初始化成功 (時間: {datetime.now().strftime('%H:%M:%S')})，目前正在嘗試監控盤中數據...")
 
     def load_encrypted_f(self):
         """解密黑盒子 F 策略"""
@@ -57,32 +57,53 @@ class CoreSystem:
         mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
         return mod
 
-    def send_to_discord(self, content, file_path=None):
-        if not WEBHOOK_URL: return
+    def send_to_discord(self, message, file_path=None):
+        url = os.environ.get("DISCORD_WEBHOOK_URL")
+        if not url:
+            print("❌ 錯誤: 找不到 DISCORD_WEBHOOK_URL 環境變數")
+            return
+        
+        # [修復] 補全原本缺失的 Discord 發送實作代碼
+        payload = {"content": message}
         try:
             if file_path and os.path.exists(file_path):
-                with open(file_path, 'rb') as f:
-                    requests.post(WEBHOOK_URL, data={'content': content}, files={'file': f}, timeout=25)
+                with open(file_path, "rb") as f:
+                    response = requests.post(url, data=payload, files={"file": f})
             else:
-                requests.post(WEBHOOK_URL, json={"content": content}, timeout=10)
-        except: pass
+                response = requests.post(url, json=payload)
+                
+            if response.status_code not in [200, 204]:
+                print(f"❌ Discord 回傳錯誤代碼: {response.status_code}, 內容: {response.text}")
+            else:
+                print(f"📡 Discord 通知發送成功: {message[:20]}...")
+        except Exception as e:
+            print(f"❌ 發送 Discord 時發生異常: {e}")
 
     def run_trading_mode(self):
         """盤中監控與真實成交模擬"""
-        print(f"⚡ [監控中] {datetime.now().strftime('%H:%M:%S')}")
+        now_time = datetime.now().strftime('%H:%M:%S')
+        print(f"⚡ [監控中] {now_time}")
         df_all = self.data_service.fetch_market_snapshot()
         market_index = self.data_service.fetch_index_status()
-        if df_all.empty: return
+        if df_all.empty: 
+            print("⚠️ 警告: 抓取不到市場數據")
+            return
 
         matched_list = []
         history_file = "history_log.csv"
 
+        # 監控前 50 檔成交量大的
         for _, row in df_all.sort_values(by='amount', ascending=False).head(50).iterrows():
             sid = row['stock_id']
+            
+            # 冷卻時間檢查
             if sid in self.sent_stocks and (time.time() - self.sent_stocks[sid]) < 3600: continue
-            if not row.get('is_liquid', True): continue
+            
+            # [診斷] 流動性檢查
+            is_liquid = row.get('is_liquid', True)
+            if not is_liquid: continue
 
-            # 模擬掛單與數據餵入 F 策略
+            # 模擬掛單數據餵入
             tick_details = self.data_service.fetch_tick_details(sid)
             prices = [row['last_price']] * 10
             context = {
@@ -92,52 +113,58 @@ class CoreSystem:
             }
 
             if self.mod_f:
-                decision = self.mod_f.enhanced_process(prices, context)
-                if decision and decision.get("action") == "BUY":
-                    self.sent_stocks[sid] = time.time()
-                    # 模擬成交：強制以賣價(Ask)成交
-                    real_entry = max(decision['entry'], row.get('ask_p', row['last_price']))
-                    shares = int(self.per_trade / (real_entry * 1000))
-                    
-                    if shares > 0:
-                        trade_record = {
-                            'date': datetime.now().strftime("%Y-%m-%d"), 'time': datetime.now().strftime("%H:%M:%S"),
-                            'stock_id': sid, 'open_p': row['open_price'], 'curr_p': row['last_price'],
-                            'high_p': row['high_price'], 'low_p': row['low_price'],
-                            'entry_p': real_entry, 'exit_p': decision['stop_loss'],
-                            'pred_high': decision['pred_high'], 'shares': shares, 'status': 'OPEN',
-                            'info': decision.get('info', '')
-                        }
-                        matched_list.append(trade_record)
-                        # 紀錄至 CSV
-                        pd.DataFrame([trade_record]).to_csv(history_file, mode='a', header=not os.path.exists(history_file), index=False)
+                try:
+                    decision = self.mod_f.enhanced_process(prices, context)
+                    # [診斷日誌]
+                    if decision and decision.get("action") == "BUY":
+                        print(f"🎯 [訊號觸發] {sid} 策略判斷買入!")
+                        self.sent_stocks[sid] = time.time()
+                        real_entry = max(decision['entry'], row.get('ask_p', row['last_price']))
+                        shares = int(self.per_trade / (real_entry * 1000))
+                        
+                        if shares > 0:
+                            trade_record = {
+                                'date': datetime.now().strftime("%Y-%m-%d"), 'time': datetime.now().strftime("%H:%M:%S"),
+                                'stock_id': sid, 'open_p': row['open_price'], 'curr_p': row['last_price'],
+                                'high_p': row['high_price'], 'low_p': row['low_price'],
+                                'entry_p': real_entry, 'exit_p': decision['stop_loss'],
+                                'pred_high': decision['pred_high'], 'shares': shares, 'status': 'OPEN',
+                                'info': decision.get('info', '')
+                            }
+                            matched_list.append(trade_record)
+                            pd.DataFrame([trade_record]).to_csv(history_file, mode='a', header=not os.path.exists(history_file), index=False)
+                except Exception as e:
+                    print(f"❌ F 策略運行報錯 ({sid}): {e}")
 
-        if matched_list and self.mod_d:
-            pdf = self.mod_d.enhanced_process(matched_list)
-            ids = ", ".join([d['stock_id'] for d in matched_list])
-            self.send_to_discord(f"🎯 **AI 買入訊號**: {ids}", pdf)
-            if pdf and os.path.exists(pdf): os.remove(pdf)
+        if matched_list:
+            print(f"📊 準備發送報告，共 {len(matched_list)} 檔標的")
+            if self.mod_d:
+                try:
+                    pdf = self.mod_d.enhanced_process(matched_list)
+                    ids = ", ".join([d['stock_id'] for d in matched_list])
+                    self.send_to_discord(f"🎯 **AI 買入訊號**: {ids}", pdf)
+                    if pdf and os.path.exists(pdf): os.remove(pdf)
+                except Exception as e:
+                    print(f"❌ 生成 PDF 報告出錯: {e}")
+                    self.send_to_discord(f"🎯 **AI 買入訊號**: {ids} (PDF 生成失敗)")
 
     def main(self):
         t_int = int(datetime.now().strftime("%H%M"))
         
-        # 1. 盤中監控 (09:00 - 13:30)
         if 900 <= t_int <= 1330:
             print(f"⏰ 盤中監控時段 ({t_int})")
+            # [調整] 增加測試頻率或循環，確保 Action 不會太快結束
             for i in range(2):
                 self.run_trading_mode()
-                if i == 0: time.sleep(60)
-                
-        # 2. 盤後結算 (13:31 - 14:00)
+                if i < 1: 
+                    print("等待 60 秒進行下一次監控...")
+                    time.sleep(60)
         elif 1331 <= t_int <= 1400:
             print(f"💾 執行收盤結算戰報...")
             if self.mod_e:
-                try:
-                    self.mod_e.run_evolution()
-                except Exception as e:
-                    print(f"❌ 結算異常: {e}")
-            else:
-                print("⚠️ 找不到結算模組")
+                try: self.mod_e.run_evolution()
+                except Exception as e: print(f"❌ 結算異常: {e}")
+            else: print("⚠️ 找不到結算模組")
         else:
             print(f"🌙 系統待命 ({t_int})")
 

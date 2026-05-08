@@ -14,25 +14,24 @@ STOCK_NAMES = {
 }
 
 def setup_chinese_font():
-    """修正：使用絕對正確的 Raw 連結下載 TrueType 字體"""
+    """使用穩定的 CDN 下載 10MB+ 的完整 TTF 字體檔"""
     font_filename = "NotoSansTC.ttf"
     if not os.path.exists(font_filename):
-        print("📡 正在從備援 CDN 下載真正有效的 TTF 字體...")
-        # 改用 jsDelivr 提供的 Noto Sans TC 直接路徑，確保抓到的是 Binary
-        url = "https://jsdelivr.net"
+        print("📡 正在下載完整中文字體 (約 12MB)...")
+        # 改用更可靠的直接下載位址
+        url = "https://github.com"
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=60)
             with open(font_filename, "wb") as f:
                 f.write(r.content)
             file_size = os.path.getsize(font_filename)
             print(f"✅ 字體下載完成，檔案大小: {file_size} bytes")
-            # 偵測檔案是否為 HTML (小於 500kb 基本上就是抓錯了)
-            if file_size < 1000000:
-                 print("⚠️ 警告：字體檔案過小，可能抓到錯誤網頁。")
-        except:
+        except Exception as e:
+            print(f"❌ 下載失敗: {e}")
             return "Helvetica"
 
     try:
+        # 註冊為 'Chinese' 字體
         pdfmetrics.registerFont(TTFont('Chinese', font_filename))
         return 'Chinese'
     except Exception as e:
@@ -45,28 +44,30 @@ def enhanced_process(data_list):
     c = canvas.Canvas(filename, pagesize=A4)
     width, height = A4
 
-    # 1. 專業標題區
+    # 1. 專業標題區 (深藍色)
     c.setFillColor(colors.HexColor("#1A237E"))
     c.rect(0, height-100, width, 100, fill=1)
     c.setFillColor(colors.white)
     c.setFont(font_name, 26)
     c.drawString(40, height-60, "AI 智慧量化交易監控報告")
     
-    # 2. 數據表
+    # 2. 數據表 Header
     y = height - 150
     c.setFillColor(colors.black)
     c.setFont(font_name, 10)
     
-    # 表格標題
+    # [修正] 座標列表與標題
     headers = ["證券名稱", "現價", "建議進場", "停損防線", "預期空間"]
-    cols = 
+    cols = [45, 160, 240, 320, 420] # 補足座標數據
+    
     c.setStrokeColor(colors.black)
+    c.setLineWidth(1)
     c.line(40, y+15, 550, y+15)
     for i, h in enumerate(headers):
         c.drawString(cols[i], y, h)
     c.line(40, y-5, 550, y-5)
 
-    # 3. 填入內容
+    # 3. 數據循環
     y -= 25
     for item in data_list:
         c.setFont(font_name, 10)
@@ -75,6 +76,7 @@ def enhanced_process(data_list):
         sid = str(item['stock_id'])
         name = STOCK_NAMES.get(sid, "熱門標的")
         
+        # 繪製各欄位
         c.drawString(cols[0], y, f"{sid} {name}")
         c.drawString(cols[1], y, f"{float(item['curr_p']):.2f}")
         
@@ -84,14 +86,26 @@ def enhanced_process(data_list):
         c.setFillColor(colors.red)
         c.drawString(cols[3], y, f"{float(item['exit_p']):.2f}")
         
+        # 計算落差顏色
         diff_pct = ((float(item['pred_high']) - float(item['curr_p'])) / float(item['curr_p'])) * 100
-        c.setFillColor(colors.green if diff_pct > 0 else colors.black)
-        c.drawString(cols[4], y, f"{diff_pct:.1f}%")
+        if diff_pct > 2.0:
+            c.setFillColor(colors.darkgreen)
+            text = f"★ {diff_pct:.1f}%"
+        else:
+            c.setFillColor(colors.black)
+            text = f"{diff_pct:.1f}%"
+        c.drawString(cols[4], y, text)
         
-        y -= 20
-        if y < 50:
+        # 畫底線
+        c.setStrokeColor(colors.lightgrey)
+        c.setLineWidth(0.5)
+        c.line(40, y-5, 550, y-5)
+        
+        y -= 25
+        if y < 50: # 自動分頁
             c.showPage()
             y = height - 50
+            c.setFont(font_name, 10)
 
     c.save()
     return filename

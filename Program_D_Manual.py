@@ -1,4 +1,4 @@
-import os, requests, time
+import os, requests
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -6,7 +6,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from datetime import datetime
 
-# --- 中文名稱映射 ---
+# --- 完整中文名稱對照表 ---
 STOCK_NAMES = {
     '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2303': '聯電',
     '2603': '長榮', '2609': '陽明', '3481': '群創', '2409': '友達',
@@ -14,28 +14,29 @@ STOCK_NAMES = {
 }
 
 def setup_chinese_font():
-    """終極字體解決方案：使用 TTF 格式並強制嵌入"""
-    # 使用 Google Noto Sans TC 的輕量化 TTF 版本
-    font_filename = "font.ttf"
+    """修正：使用絕對正確的 Raw 連結下載 TrueType 字體"""
+    font_filename = "NotoSansTC.ttf"
     if not os.path.exists(font_filename):
-        print("📡 正在嘗試多重路徑下載中文字體...")
-        # 這是專門提供給 CSS 用的 TTF 直接鏈結，對 Linux 兼容性最高
-        url = "https://github.com"
+        print("📡 正在從備援 CDN 下載真正有效的 TTF 字體...")
+        # 改用 jsDelivr 提供的 Noto Sans TC 直接路徑，確保抓到的是 Binary
+        url = "https://jsdelivr.net"
         try:
             r = requests.get(url, timeout=30)
             with open(font_filename, "wb") as f:
                 f.write(r.content)
-            print(f"✅ 字體下載成功，大小: {os.path.getsize(font_filename)} bytes")
+            file_size = os.path.getsize(font_filename)
+            print(f"✅ 字體下載完成，檔案大小: {file_size} bytes")
+            # 偵測檔案是否為 HTML (小於 500kb 基本上就是抓錯了)
+            if file_size < 1000000:
+                 print("⚠️ 警告：字體檔案過小，可能抓到錯誤網頁。")
         except:
             return "Helvetica"
 
     try:
-        # 強制註冊
         pdfmetrics.registerFont(TTFont('Chinese', font_filename))
-        print("✅ 字體 'Chinese' 註冊成功")
         return 'Chinese'
     except Exception as e:
-        print(f"❌ 字體註冊失敗: {e}")
+        print(f"❌ 註冊失敗: {e}")
         return "Helvetica"
 
 def enhanced_process(data_list):
@@ -44,61 +45,53 @@ def enhanced_process(data_list):
     c = canvas.Canvas(filename, pagesize=A4)
     width, height = A4
 
-    # 1. 頁首
-    c.setFillColor(colors.HexColor("#0D1B2A"))
-    c.rect(0, height-110, width, 110, fill=1)
+    # 1. 專業標題區
+    c.setFillColor(colors.HexColor("#1A237E"))
+    c.rect(0, height-100, width, 100, fill=1)
     c.setFillColor(colors.white)
-    
-    # 關鍵：如果在 Helvetica 下，中文會完全消失，所以我們確保字體存在
     c.setFont(font_name, 26)
-    c.drawString(40, height-55, "AI 智慧量化交易監控報告")
+    c.drawString(40, height-60, "AI 智慧量化交易監控報告")
     
-    c.setFont(font_name, 10)
-    c.drawString(40, height-85, f"報告日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    # 2. 表格標題
+    # 2. 數據表
     y = height - 150
     c.setFillColor(colors.black)
-    c.setFont(font_name, 12)
-    c.drawString(40, y, f"【 本次掃描標的: {len(data_list)} 檔 】")
-    
-    y -= 30
-    c.setFillColor(colors.HexColor("#F2F2F2"))
-    c.rect(35, y-5, 525, 25, fill=1, stroke=0)
-    c.setFillColor(colors.black)
     c.setFont(font_name, 10)
-    headers = ["證券名稱", "現價", "開盤", "建議進場", "停損防線", "預期獲利"]
-    cols = [45, 130, 200, 280, 360, 440]
     
+    # 表格標題
+    headers = ["證券名稱", "現價", "建議進場", "停損防線", "預期空間"]
+    cols = 
+    c.setStrokeColor(colors.black)
+    c.line(40, y+15, 550, y+15)
     for i, h in enumerate(headers):
-        c.drawString(cols[i], y+2, h)
+        c.drawString(cols[i], y, h)
+    c.line(40, y-5, 550, y-5)
 
-    # 3. 數據列
+    # 3. 填入內容
     y -= 25
     for item in data_list:
         c.setFont(font_name, 10)
         c.setFillColor(colors.black)
         
-        name = STOCK_NAMES.get(str(item['stock_id']), "熱門標的")
+        sid = str(item['stock_id'])
+        name = STOCK_NAMES.get(sid, "熱門標的")
         
-        c.drawString(cols[0], y, f"{item['stock_id']} {name}")
+        c.drawString(cols[0], y, f"{sid} {name}")
         c.drawString(cols[1], y, f"{float(item['curr_p']):.2f}")
-        c.drawString(cols[2], y, f"{float(item['open_p']):.2f}")
         
         c.setFillColor(colors.blue)
-        c.drawString(cols[3], y, f"{float(item['entry_p']):.2f}")
+        c.drawString(cols[2], y, f"{float(item['entry_p']):.2f}")
         
         c.setFillColor(colors.red)
-        c.drawString(cols[4], y, f"{float(item['exit_p']):.2f}")
+        c.drawString(cols[3], y, f"{float(item['exit_p']):.2f}")
         
-        # 獲利落差
         diff_pct = ((float(item['pred_high']) - float(item['curr_p'])) / float(item['curr_p'])) * 100
         c.setFillColor(colors.green if diff_pct > 0 else colors.black)
-        c.drawString(cols[5], y, f"{diff_pct:.1f}%")
+        c.drawString(cols[4], y, f"{diff_pct:.1f}%")
         
-        c.setStrokeColor(colors.lightgrey)
-        c.line(35, y-5, 560, y-5)
-        y -= 25
+        y -= 20
+        if y < 50:
+            c.showPage()
+            y = height - 50
 
     c.save()
     return filename

@@ -14,32 +14,31 @@ STOCK_NAMES = {
 }
 
 def setup_chinese_font():
-    """強制使用穩定 CDN 下載，避開 GitHub 網頁跳轉陷阱"""
+    """強制從 CDN 下載真正有效的二進位字體檔"""
     font_filename = "NotoSansTC.otf"
     if not os.path.exists(font_filename):
-        print("📡 啟動終極修復：正在從 jsDelivr CDN 下載 10MB+ 中文字體...")
-        # 改用 jsDelivr 加速連結，這是真正的原始檔案路徑
+        print("📡 正在從 jsDelivr 下載中文字體 (約 12MB)...")
+        # 使用真正指向檔案的 jsDelivr 連結，避開 GitHub 網頁
         url = "https://jsdelivr.net"
         try:
             r = requests.get(url, timeout=60, stream=True)
             if r.status_code == 200:
                 with open(font_filename, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024):
-                        if chunk: f.write(chunk)
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
                 file_size = os.path.getsize(font_filename)
-                print(f"✅ 下載完畢，真實大小: {file_size} bytes")
+                print(f"✅ 下載完成，檔案大小: {file_size} bytes")
                 if file_size < 1000000:
-                    print("❌ 下載異常：檔案大小過小，可能仍抓到無效數據")
+                    print("⚠️ 警告：檔案大小異常，可能下載失敗")
             else:
-                print(f"❌ CDN 請求失敗狀態碼: {r.status_code}")
+                print(f"❌ CDN 請求失敗: {r.status_code}")
         except Exception as e:
             print(f"❌ 下載過程異常: {e}")
             return "Helvetica"
 
     try:
-        # 註冊字體
+        # 註冊為 'Chinese' 字體
         pdfmetrics.registerFont(TTFont('Chinese', font_filename))
-        print("✅ 字體 'Chinese' 註冊成功")
         return 'Chinese'
     except Exception as e:
         print(f"❌ 註冊失敗: {e}")
@@ -51,7 +50,7 @@ def enhanced_process(data_list):
     c = canvas.Canvas(filename, pagesize=A4)
     width, height = A4
 
-    # 1. 專業標題區
+    # 1. 專業標題區 (深藍色)
     c.setFillColor(colors.HexColor("#1A237E"))
     c.rect(0, height-100, width, 100, fill=1)
     c.setFillColor(colors.white)
@@ -63,16 +62,18 @@ def enhanced_process(data_list):
     c.setFillColor(colors.black)
     c.setFont(font_name, 10)
     
+    # [修正] 座標列表與標題，確保欄位不重疊
     headers = ["證券名稱", "現價", "建議進場", "停損防線", "預期空間"]
-    cols = 
+    cols = # 定義正確的水平座標
     
     c.setStrokeColor(colors.black)
+    c.setLineWidth(1)
     c.line(40, y+15, 550, y+15)
     for i, h in enumerate(headers):
         c.drawString(cols[i], y, h)
     c.line(40, y-5, 550, y-5)
 
-    # 3. 數據填入
+    # 3. 數據循環
     y -= 25
     for item in data_list:
         c.setFont(font_name, 10)
@@ -81,23 +82,39 @@ def enhanced_process(data_list):
         sid = str(item['stock_id'])
         name = STOCK_NAMES.get(sid, "熱門標的")
         
-        c.drawString(cols[0], y, f"{sid} {name}")
-        c.drawString(cols[1], y, f"{float(item['curr_p']):,.2f}")
+        # 繪製各欄位
+        c.drawString(cols, y, f"{sid} {name}")
+        c.drawString(cols, y, f"{float(item['curr_p']):,.2f}")
         
         c.setFillColor(colors.blue)
-        c.drawString(cols[2], y, f"{float(item['entry_p']):,.2f}")
+        c.drawString(cols, y, f"{float(item['entry_p']):,.2f}")
         
         c.setFillColor(colors.red)
-        c.drawString(cols[3], y, f"{float(item['exit_p']):,.2f}")
+        c.drawString(cols, y, f"{float(item['exit_p']):,.2f}")
         
-        diff_p = ((float(item['pred_high']) - float(item['curr_p'])) / float(item['curr_p'])) * 100
-        c.setFillColor(colors.darkgreen if diff_p > 2 else colors.black)
-        c.drawString(cols[4], y, f"{diff_p:.1f}%")
+        # 計算落差並標色
+        try:
+            diff_p = ((float(item['pred_high']) - float(item['curr_p'])) / float(item['curr_p'])) * 100
+            if diff_p > 2.0:
+                c.setFillColor(colors.darkgreen)
+                text = f"★ {diff_p:.1f}%"
+            else:
+                c.setFillColor(colors.black)
+                text = f"{diff_p:.1f}%"
+            c.drawString(cols, y, text)
+        except:
+            c.drawString(cols, y, "0.0%")
+        
+        # 畫底線
+        c.setStrokeColor(colors.lightgrey)
+        c.setLineWidth(0.5)
+        c.line(40, y-5, 550, y-5)
         
         y -= 25
-        if y < 50:
+        if y < 50: # 分頁處理
             c.showPage()
             y = height - 50
+            c.setFont(font_name, 10)
 
     c.save()
     return filename

@@ -19,7 +19,7 @@ except Exception:
     has_data = False
 
 fetch_period = "1d" if has_data else "3y"
-print(f"📡 模式啟動：抓取 {fetch_period} 數據...")
+print(f"📡 【華立3010】模式啟動：抓取 {fetch_period} 數據...")
 
 stock = yf.Ticker("3010.TW")
 df = stock.history(period=fetch_period, interval="1d")
@@ -27,12 +27,14 @@ df = stock.history(period=fetch_period, interval="1d")
 if not df.empty:
     df = df.reset_index()
     df_bq = pd.DataFrame()
+    
+    # 📝 剛性資料清洗：全面強制截斷小數點，確保數值純淨
     df_bq['trade_date'] = df['Date'].dt.strftime('%Y-%m-%d')
-    df_bq['open_price'] = df['Open'].astype(float)
-    df_bq['high_price'] = df['High'].astype(float)
-    df_bq['low_price'] = df['Low'].astype(float)
-    df_bq['close_price'] = df['Close'].astype(float)
-    df_bq['volume'] = df['Volume'].astype(int)
+    df_bq['open_price'] = df['Open'].round(2).astype(float)
+    df_bq['high_price'] = df['High'].round(2).astype(float)
+    df_bq['low_price'] = df['Low'].round(2).astype(float)
+    df_bq['close_price'] = df['Close'].round(2).astype(float)
+    df_bq['volume'] = df['Volume'].astype(int)  # 成交量強制為整數
 
     job_config = bigquery.LoadJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
@@ -40,6 +42,6 @@ if not df.empty:
     )
     job = client.load_table_from_dataframe(df_bq, table_id, job_config=job_config)
     job.result()
-    print("🏁 原始數據成功固化存入資料庫 1！")
+    print("🏁 【華立3010】原始數據已成功四捨五入並存入資料庫 1！")
 else:
-    print("⚠️ 今日無交易數據。")
+    print("⚠️ 今日非交易日，無新數據。")
